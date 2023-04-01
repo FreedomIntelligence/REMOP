@@ -13,13 +13,11 @@ Please refer to `examples/condener_beir`.
 ## References
 
 ```bibtex
-@misc{liang2023modular,
-      title={Modular Retrieval for Generalization and Interpretation}, 
-      author={Juhao Liang and Chen Zhang and Zhengyang Tang and Jie Fu and Dawei Song and Benyou Wang},
-      year={2023},
-      eprint={2303.13419},
-      archivePrefix={arXiv},
-      primaryClass={cs.IR}
+@article{yu2023nature,
+  title={Nature Language Reasoning, A Survey},
+  author={Yu, Fei and Zhang, Hongbo and Wang, Benyou},
+  journal={arXiv preprint arXiv:2303.14725},
+  year={2023}
 }
 ```
 
