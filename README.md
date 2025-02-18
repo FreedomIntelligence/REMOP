@@ -1,5 +1,5 @@
 # Introduction
-Code for the paper: **Towards Modular Dense Retrieval with Prompt Tuning.
+Code for the paper: **Towards Modular Dense Retrieval with Prompt Tuning**.
 
 
 ## Installation
