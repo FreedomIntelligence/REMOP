@@ -94,6 +94,7 @@ class DenseModel(nn.Module):
         self.model_args = model_args
         self.train_args = train_args
         self.data_args = data_args
+        self._keys_to_ignore_on_save = []
 
         if train_args.negatives_x_device:
             if not dist.is_initialized():
@@ -225,6 +226,7 @@ class DenseModel(nn.Module):
                     **hf_kwargs
                 )
             else:
+                logger.info(f'loading model weight from {model_args.model_name_or_path}')
                 lm_q = model_cls.from_pretrained(model_args.model_name_or_path, **hf_kwargs)
                 lm_p = lm_q
         # load pre-trained
