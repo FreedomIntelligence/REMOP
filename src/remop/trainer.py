@@ -3,7 +3,7 @@ from itertools import repeat
 from typing import Dict, List, Tuple, Optional, Any, Union
 
 from transformers.trainer import Trainer
-from transformers.trainer_utils import ShardedDDPOption
+# from transformers.trainer_utils import ShardedDDPOption
 from transformers.utils import is_sagemaker_mp_enabled
 from transformers.trainer_pt_utils import get_parameter_names
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
@@ -62,7 +62,7 @@ class DenseTrainer(Trainer):
             num_workers=self.args.dataloader_num_workers,
         )
 
-    def compute_loss(self, model, inputs):
+    def compute_loss(self, model, inputs, num_items_in_batch=None):
         query, passage, attrs = inputs
         loss = model(query=query, passage=passage, attrs=attrs).loss
         return loss
@@ -131,26 +131,26 @@ class DenseTrainer(Trainer):
 
             optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(self.args)
 
-            if self.sharded_ddp == ShardedDDPOption.SIMPLE:
-                self.optimizer = OSS(
-                    params=optimizer_grouped_parameters,
-                    optim=optimizer_cls,
-                    **optimizer_kwargs,
-                )
-            else:
-                self.optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)
-                if optimizer_cls.__name__ == "Adam8bit":
-                    import bitsandbytes
+            # if self.sharded_ddp == ShardedDDPOption.SIMPLE:
+            #     self.optimizer = OSS(
+            #         params=optimizer_grouped_parameters,
+            #         optim=optimizer_cls,
+            #         **optimizer_kwargs,
+            #     )
+            # else:
+            self.optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)
+            if optimizer_cls.__name__ == "Adam8bit":
+                import bitsandbytes
 
-                    manager = bitsandbytes.optim.GlobalOptimManager.get_instance()
+                manager = bitsandbytes.optim.GlobalOptimManager.get_instance()
 
-                    for module in opt_model.modules():
-                        if isinstance(module, nn.Embedding):
-                            manager.register_module_override(module, "weight", {"optim_bits": 32})
-                            logger.debug(f"bitsandbytes: will optimize {module} in fp32")
+                for module in opt_model.modules():
+                    if isinstance(module, nn.Embedding):
+                        manager.register_module_override(module, "weight", {"optim_bits": 32})
+                        logger.debug(f"bitsandbytes: will optimize {module} in fp32")
 
-        if is_sagemaker_mp_enabled():
-            self.optimizer = smp.DistributedOptimizer(self.optimizer)
+        # if is_sagemaker_mp_enabled():
+        #     self.optimizer = smp.DistributedOptimizer(self.optimizer)
 
         return self.optimizer
 
@@ -187,6 +187,8 @@ class GCTrainer(DenseTrainer):
 
         loss_fn_cls = DistributedContrastiveLoss if self.args.negatives_x_device else SimpleContrastiveLoss
         loss_fn = loss_fn_cls(self.model.data_args.train_n_passages)
+        self.scaler = torch.cuda.amp.GradScaler() if self.args.fp16 else None
+
 
         self.gc = GradCache(
             models=[self.model, self.model],
@@ -198,15 +200,15 @@ class GCTrainer(DenseTrainer):
             scaler=self.scaler
         )
 
-    def training_step(self, model, inputs) -> torch.Tensor:
+    def training_step(self, model, inputs, num_items_in_batch=None) -> torch.Tensor:
         model.train()
 
         queries, passages, attrs = self._prepare_inputs(inputs)
         n_passages = self.model.data_args.train_n_passages
         queries, passages = {'query': queries, 'attrs': attrs}, {'passage': passages, 'attrs': torch.cat([i.repeat(n_passages, 1) for i in attrs], dim=0)}
         
-        _distributed = self.args.local_rank > -1
+        # _distributed = self.args.local_rank > -1
         self.gc.models = [model, model]
-        loss = self.gc(queries, passages, no_sync_except_last=_distributed)
+        loss = self.gc(queries, passages)
 
-        return loss / self._dist_loss_scale_factor
+        return loss
