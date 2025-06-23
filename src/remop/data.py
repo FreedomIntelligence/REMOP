@@ -29,7 +29,6 @@ class TrainDataset(Dataset):
         self.train_data = datasets.load_dataset(
             'json',
             data_files=path_to_data,
-            ignore_verifications=False,
             cache_dir="./cache"
         )['train']
 
@@ -89,8 +88,8 @@ class TrainDataset(Dataset):
         encoded_query = self.create_one_example(qry, is_query=True)
 
         encoded_passages = []
-        group_positives = group['positives']
-        group_negatives = group['negatives']
+        group_positives = group['pos_ctxs']
+        group_negatives = group['neg_ctxs']
         attrs = group['prompt_ids']
 
         if self.data_args.positive_passage_no_shuffle:
@@ -98,7 +97,6 @@ class TrainDataset(Dataset):
         else:
             pos_psg = group_positives[(_hashed_seed + epoch) % len(group_positives)]
         encoded_passages.append(self.create_one_example(pos_psg))
-
         negative_size = self.data_args.train_n_passages - 1
         if len(group_negatives) < negative_size:
             negs = random.choices(group_negatives, k=negative_size)
@@ -133,7 +131,6 @@ class EncodeDataset(Dataset):
             self.encode_data = datasets.load_dataset(
                 'json',
                 data_files=data_files,
-                ignore_verifications=False,
                 cache_dir="./cache"
             )['train']
 
