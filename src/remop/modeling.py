@@ -295,7 +295,7 @@ class DenseModel(nn.Module):
             if untie_encoder:
                 self.lm_p.init_attribute_prompts(attribute_prompt)
             logging.info("Initialize attribute prompt list from scratch: {}".format(attribute_prompt))
-        elif os.path.isdir(attribute_prompt):
+        elif attribute_prompt is not None and os.path.isdir(attribute_prompt):
             lm_q_attribute_prompt_state_dicts = []
             lm_p_attribute_prompt_state_dicts = []
             for attribute in dataset_attributes:

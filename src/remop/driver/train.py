@@ -13,6 +13,8 @@ from remop.arguments import ModelArguments, DataArguments, \
 from remop.data import TrainDataset, QPCollator
 from remop.modeling import DenseModel
 from remop.trainer import DenseTrainer as Trainer, GCTrainer
+import wandb
+wandb.init(project="train_rempo")
 
 logger = logging.getLogger(__name__)
 
@@ -66,12 +68,13 @@ def main():
     config.prefix = model_args.prefix
     config.pre_seq_len = model_args.pre_seq_len
     config.hidden_dropout_prob = model_args.hidden_dropout_prob
-
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
         cache_dir=model_args.cache_dir,
         use_fast=False,
     )
+    # we need to set the model_name_or_path here because the build function will use it to load the model
+    model_args.model_name_or_path = training_args.checkpoint_dir
     model = DenseModel.build(
         model_args,
         data_args,
@@ -83,8 +86,8 @@ def main():
     assert data_args.train_dir is not None, "In training process: data_args.train_dir should not be None"
     train_dataset = TrainDataset(data_args, data_args.train_path, tokenizer)
     dataset_attributes = train_dataset.dataset_attributes
-
     trainer_cls = GCTrainer if training_args.grad_cache else Trainer
+ 
     trainer = trainer_cls(
         model=model,
         args=training_args,
@@ -98,13 +101,14 @@ def main():
     
     attribute_prompt = model_args.attribute_prompt_dir if model_args.attribute_prompt_dir else len(dataset_attributes)
     trainer.load_prompt(model_args.general_prompt_path, attribute_prompt, model_args.untie_encoder, dataset_attributes)
-    
     train_dataset.trainer = trainer
-    trainer.train()
+    
+    trainer.train(resume_from_checkpoint=training_args.checkpoint_dir)
+    
     trainer.save_prompt(dataset_attributes)
     trainer.save_model()
-    if trainer.is_world_process_zero():
-        tokenizer.save_pretrained(training_args.output_dir)
+    # if trainer.is_world_process_zero():
+    #     tokenizer.save_pretrained(training_args.output_dir)
 
 if __name__ == "__main__":
     main()
