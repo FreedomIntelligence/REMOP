@@ -14,9 +14,15 @@ from transformers.modeling_outputs import ModelOutput
 
 from typing import Optional, Dict
 
-from .arguments import ModelArguments, DataArguments, \
-    DenseTrainingArguments as TrainingArguments
-from .modeling_sequence_classification import BertPrefixForSequenceClassification, RobertaPrefixForSequenceClassification
+from .arguments import (
+    ModelArguments,
+    DataArguments,
+    DenseTrainingArguments as TrainingArguments,
+)
+from .modeling_sequence_classification import (
+    BertPrefixForSequenceClassification,
+    RobertaPrefixForSequenceClassification,
+)
 from transformers import BertForSequenceClassification, RobertaForSequenceClassification
 
 import logging
@@ -33,12 +39,7 @@ class DenseOutput(ModelOutput):
 
 
 class LinearPooler(nn.Module):
-    def __init__(
-            self,
-            input_dim: int = 768,
-            output_dim: int = 768,
-            tied=True
-    ):
+    def __init__(self, input_dim: int = 768, output_dim: int = 768, tied=True):
         super(LinearPooler, self).__init__()
         self.linear_q = nn.Linear(input_dim, output_dim)
         if tied:
@@ -46,7 +47,7 @@ class LinearPooler(nn.Module):
         else:
             self.linear_p = nn.Linear(input_dim, output_dim)
 
-        self._config = {'input_dim': input_dim, 'output_dim': output_dim, 'tied': tied}
+        self._config = {"input_dim": input_dim, "output_dim": output_dim, "tied": tied}
 
     def forward(self, q: Tensor = None, p: Tensor = None):
         if q is not None:
@@ -58,30 +59,32 @@ class LinearPooler(nn.Module):
 
     def load(self, ckpt_dir: str):
         if ckpt_dir is not None:
-            _pooler_path = os.path.join(ckpt_dir, 'pooler.pt')
+            _pooler_path = os.path.join(ckpt_dir, "pooler.pt")
             if os.path.exists(_pooler_path):
-                logger.info(f'Loading Pooler from {ckpt_dir}')
-                state_dict = torch.load(os.path.join(ckpt_dir, 'pooler.pt'), map_location='cpu')
+                logger.info(f"Loading Pooler from {ckpt_dir}")
+                state_dict = torch.load(
+                    os.path.join(ckpt_dir, "pooler.pt"), map_location="cpu"
+                )
                 self.load_state_dict(state_dict)
                 return
         logger.info("Training Pooler from scratch")
         return
 
     def save_pooler(self, save_path):
-        torch.save(self.state_dict(), os.path.join(save_path, 'pooler.pt'))
-        with open(os.path.join(save_path, 'pooler_config.json'), 'w') as f:
+        torch.save(self.state_dict(), os.path.join(save_path, "pooler.pt"))
+        with open(os.path.join(save_path, "pooler_config.json"), "w") as f:
             json.dump(self._config, f)
 
 
 class DenseModel(nn.Module):
     def __init__(
-            self,
-            lm_q: PreTrainedModel,
-            lm_p: PreTrainedModel,
-            pooler: nn.Module = None,
-            model_args: ModelArguments = None,
-            data_args: DataArguments = None,
-            train_args: TrainingArguments = None,
+        self,
+        lm_q: PreTrainedModel,
+        lm_p: PreTrainedModel,
+        pooler: nn.Module = None,
+        model_args: ModelArguments = None,
+        data_args: DataArguments = None,
+        train_args: TrainingArguments = None,
     ):
         super().__init__()
 
@@ -89,7 +92,7 @@ class DenseModel(nn.Module):
         self.lm_p = lm_p
         self.pooler = pooler
 
-        self.cross_entropy = nn.CrossEntropyLoss(reduction='mean')
+        self.cross_entropy = nn.CrossEntropyLoss(reduction="mean")
 
         self.model_args = model_args
         self.train_args = train_args
@@ -98,52 +101,46 @@ class DenseModel(nn.Module):
 
         if train_args.negatives_x_device:
             if not dist.is_initialized():
-                raise ValueError('Distributed training has not been initialized for representation all gather.')
+                raise ValueError(
+                    "Distributed training has not been initialized for representation all gather."
+                )
             self.process_rank = dist.get_rank()
             self.world_size = dist.get_world_size()
 
     def forward(
-            self,
-            query: Dict[str, Tensor] = None,
-            passage: Dict[str, Tensor] = None,
-            attrs: Dict[str, Tensor] = None,
+        self,
+        query: Dict[str, Tensor] = None,
+        passage: Dict[str, Tensor] = None,
+        attrs: Dict[str, Tensor] = None,
     ):
         q_hidden, q_reps = self.encode_query(query, attrs=attrs)
         p_hidden, p_reps = self.encode_passage(passage)
 
         if q_reps is None or p_reps is None:
-            return DenseOutput(
-                q_reps=q_reps,
-                p_reps=p_reps
-            )
+            return DenseOutput(q_reps=q_reps, p_reps=p_reps)
 
         if self.training:
             if self.train_args.negatives_x_device:
                 q_reps = self.dist_gather_tensor(q_reps)
                 p_reps = self.dist_gather_tensor(p_reps)
 
-            effective_bsz = self.train_args.per_device_train_batch_size * self.world_size \
-                if self.train_args.negatives_x_device \
+            effective_bsz = (
+                self.train_args.per_device_train_batch_size * self.world_size
+                if self.train_args.negatives_x_device
                 else self.train_args.per_device_train_batch_size
+            )
 
             scores = torch.matmul(q_reps, p_reps.transpose(0, 1))
             scores = scores.view(effective_bsz, -1)
 
             target = torch.arange(
-                scores.size(0),
-                device=scores.device,
-                dtype=torch.long
+                scores.size(0), device=scores.device, dtype=torch.long
             )
             target = target * self.data_args.train_n_passages
             loss = self.cross_entropy(scores, target)
             if self.train_args.negatives_x_device:
                 loss = loss * self.world_size  # counter average weight reduction
-            return DenseOutput(
-                loss=loss,
-                scores=scores,
-                q_reps=q_reps,
-                p_reps=p_reps
-            )
+            return DenseOutput(loss=loss, scores=scores, q_reps=q_reps, p_reps=p_reps)
 
         else:
             loss = None
@@ -152,12 +149,7 @@ class DenseModel(nn.Module):
             else:
                 scores = None
 
-            return DenseOutput(
-                loss=loss,
-                scores=scores,
-                q_reps=q_reps,
-                p_reps=p_reps
-            )
+            return DenseOutput(loss=loss, scores=scores, q_reps=q_reps, p_reps=p_reps)
 
     def encode_passage(self, psg):
         if psg is None:
@@ -171,7 +163,9 @@ class DenseModel(nn.Module):
     def encode_query(self, qry, attrs):
         if qry is None:
             return None, None
-        qry_out = self.lm_q(**qry, attrs=attrs, return_dict=True, output_hidden_states=True)
+        qry_out = self.lm_q(
+            **qry, attrs=attrs, return_dict=True, output_hidden_states=True
+        )
         q_hidden = qry_out.hidden_states[-1]
         q_reps = q_hidden[:, 0]
         return q_hidden, q_reps
@@ -181,18 +175,18 @@ class DenseModel(nn.Module):
         pooler = LinearPooler(
             model_args.projection_in_dim,
             model_args.projection_out_dim,
-            tied=not model_args.untie_encoder
+            tied=not model_args.untie_encoder,
         )
         pooler.load(model_args.model_name_or_path)
         return pooler
 
     @classmethod
     def build(
-            cls,
-            model_args: ModelArguments,
-            data_args: DataArguments,
-            train_args: TrainingArguments,
-            **hf_kwargs,
+        cls,
+        model_args: ModelArguments,
+        data_args: DataArguments,
+        train_args: TrainingArguments,
+        **hf_kwargs,
     ):
         if model_args.model_type == "bert":
             if model_args.prefix:
@@ -210,31 +204,35 @@ class DenseModel(nn.Module):
         # load local
         if os.path.isdir(model_args.model_name_or_path):
             if model_args.untie_encoder:
-                _qry_model_path = os.path.join(model_args.model_name_or_path, 'query_model')
-                _psg_model_path = os.path.join(model_args.model_name_or_path, 'passage_model')
+                _qry_model_path = os.path.join(
+                    model_args.model_name_or_path, "query_model"
+                )
+                _psg_model_path = os.path.join(
+                    model_args.model_name_or_path, "passage_model"
+                )
                 if not os.path.exists(_qry_model_path):
                     _qry_model_path = model_args.model_name_or_path
                     _psg_model_path = model_args.model_name_or_path
-                logger.info(f'loading query model weight from {_qry_model_path}')
-                lm_q = model_cls.from_pretrained(
-                    _qry_model_path,
-                    **hf_kwargs
-                )
-                logger.info(f'loading passage model weight from {_psg_model_path}')
-                lm_p = model_cls.from_pretrained(
-                    _psg_model_path,
-                    **hf_kwargs
-                )
+                logger.info(f"loading query model weight from {_qry_model_path}")
+                lm_q = model_cls.from_pretrained(_qry_model_path, **hf_kwargs)
+                logger.info(f"loading passage model weight from {_psg_model_path}")
+                lm_p = model_cls.from_pretrained(_psg_model_path, **hf_kwargs)
             else:
-                logger.info(f'loading model weight from {model_args.model_name_or_path}')
-                lm_q = model_cls.from_pretrained(model_args.model_name_or_path, **hf_kwargs)
+                logger.info(
+                    f"loading model weight from {model_args.model_name_or_path}"
+                )
+                lm_q = model_cls.from_pretrained(
+                    model_args.model_name_or_path, **hf_kwargs
+                )
                 lm_p = lm_q
         # load pre-trained
         else:
             lm_q = model_cls.from_pretrained(model_args.model_name_or_path, **hf_kwargs)
             lm_p = copy.deepcopy(lm_q) if model_args.untie_encoder else lm_q
 
-        assert not model_args.add_pooler, "We don't support add_pooler because we've chosen sequence classification header as the projection head"
+        assert (
+            not model_args.add_pooler
+        ), "We don't support add_pooler because we've chosen sequence classification header as the projection head"
         if model_args.add_pooler:
             pooler = cls.build_pooler(model_args)
         else:
@@ -246,16 +244,16 @@ class DenseModel(nn.Module):
             pooler=pooler,
             model_args=model_args,
             data_args=data_args,
-            train_args=train_args
+            train_args=train_args,
         )
         return model
 
     def save(self, output_dir: str):
         if self.model_args.untie_encoder:
-            os.makedirs(os.path.join(output_dir, 'query_model'))
-            os.makedirs(os.path.join(output_dir, 'passage_model'))
-            self.lm_q.save_pretrained(os.path.join(output_dir, 'query_model'))
-            self.lm_p.save_pretrained(os.path.join(output_dir, 'passage_model'))
+            os.makedirs(os.path.join(output_dir, "query_model"))
+            os.makedirs(os.path.join(output_dir, "passage_model"))
+            self.lm_q.save_pretrained(os.path.join(output_dir, "query_model"))
+            self.lm_p.save_pretrained(os.path.join(output_dir, "passage_model"))
         else:
             self.lm_q.save_pretrained(output_dir)
 
@@ -278,55 +276,85 @@ class DenseModel(nn.Module):
     def get_attribute_prompts(self):
         return self.lm_q.get_attribute_prompts(), self.lm_p.get_attribute_prompts()
 
-    def load_prompt(self, general_prompt_path, attribute_prompt, untie_encoder: bool, dataset_attributes):
+    def load_prompt(
+        self,
+        general_prompt_path,
+        attribute_prompt,
+        untie_encoder: bool,
+        dataset_attributes,
+    ):
         # load general prompt from file
         if general_prompt_path and os.path.exists(general_prompt_path):
             state_dict = self.state_dict()
             general_state_dict = torch.load(general_prompt_path)
             state_dict.update(general_state_dict)
             self.load_state_dict(state_dict)
-            logging.info("Successfully loaded general prompt: {}".format(general_prompt_path))
+            logging.info(
+                "Successfully loaded general prompt: {}".format(general_prompt_path)
+            )
         else:
-            logging.info("Failed to load general prompt: {}".format(general_prompt_path))
-        
+            logging.info(
+                "Failed to load general prompt: {}".format(general_prompt_path)
+            )
+
         # initialize attribute prompt from trained prompts (directory) or from scratch (int)
         if isinstance(attribute_prompt, int):
             self.lm_q.init_attribute_prompts(attribute_prompt)
             if untie_encoder:
                 self.lm_p.init_attribute_prompts(attribute_prompt)
-            logging.info("Initialize attribute prompt list from scratch: {}".format(attribute_prompt))
+            logging.info(
+                "Initialize attribute prompt list from scratch: {}".format(
+                    attribute_prompt
+                )
+            )
         elif attribute_prompt is not None and os.path.isdir(attribute_prompt):
             lm_q_attribute_prompt_state_dicts = []
             lm_p_attribute_prompt_state_dicts = []
             for attribute in dataset_attributes:
-                lm_q_prompt_path = os.path.join(attribute_prompt, "lm_q_attribute_{}.prompt".format(attribute))
-                lm_p_prompt_path = os.path.join(attribute_prompt, "lm_p_attribute_{}.prompt".format(attribute))
-
-                assert os.path.exists(lm_q_prompt_path), "Prompt path doesn't exist: {}".format(lm_q_prompt_path)
+                lm_q_prompt_path = os.path.join(
+                    attribute_prompt, "lm_q_attribute_{}.prompt".format(attribute)
+                )
+                lm_p_prompt_path = os.path.join(
+                    attribute_prompt, "lm_p_attribute_{}.prompt".format(attribute)
+                )
+                assert os.path.exists(
+                    lm_q_prompt_path
+                ), "Prompt path doesn't exist: {}".format(lm_q_prompt_path)
                 lm_q_attribute_prompt_state_dicts.append(torch.load(lm_q_prompt_path))
 
                 if untie_encoder:
-                    assert os.path.exists(lm_p_prompt_path), "Prompt path doesn't exist: {}".format(lm_p_prompt_path)
-                    lm_p_attribute_prompt_state_dicts.append(torch.load(lm_p_prompt_path))
+                    assert os.path.exists(
+                        lm_p_prompt_path
+                    ), "Prompt path doesn't exist: {}".format(lm_p_prompt_path)
+                    lm_p_attribute_prompt_state_dicts.append(
+                        torch.load(lm_p_prompt_path)
+                    )
 
             if untie_encoder:
                 self.lm_q.load_attribute_prompts(lm_q_attribute_prompt_state_dicts)
                 self.lm_p.load_attribute_prompts(lm_p_attribute_prompt_state_dicts)
             else:
                 self.lm_q.load_attribute_prompts(lm_q_attribute_prompt_state_dicts)
-            logging.info("Successfully loaded attribute prompt list: {} from directory {}".format(dataset_attributes, attribute_prompt))
+            logging.info(
+                "Successfully loaded attribute prompt list: {} from directory {}".format(
+                    dataset_attributes, attribute_prompt
+                )
+            )
         else:
-            logging.info("Failed to load attribute prompt list: {}".format(attribute_prompt))
+            logging.info(
+                "Failed to load attribute prompt list: {}".format(attribute_prompt)
+            )
+
 
 class DenseModelForInference(DenseModel):
     POOLER_CLS = LinearPooler
 
     def __init__(
-            self,
-            lm_q: PreTrainedModel,
-            lm_p: PreTrainedModel,
-            pooler: nn.Module = None,
-            **kwargs,
+        self,
+        lm_q: PreTrainedModel,
+        lm_p: PreTrainedModel,
+        pooler: nn.Module = None,
+        **kwargs,
     ):
         nn.Module.__init__(self)
         self.lm_q = lm_q
@@ -342,10 +370,10 @@ class DenseModelForInference(DenseModel):
         return super(DenseModelForInference, self).encode_query(qry, attrs)
 
     def forward(
-            self,
-            query: Dict[str, Tensor] = None,
-            passage: Dict[str, Tensor] = None,
-            attrs: Dict[str, Tensor] = None,
+        self,
+        query: Dict[str, Tensor] = None,
+        passage: Dict[str, Tensor] = None,
+        attrs: Dict[str, Tensor] = None,
     ):
         q_hidden, q_reps = self.encode_query(query, attrs)
         p_hidden, p_reps = self.encode_passage(passage)
@@ -353,12 +381,12 @@ class DenseModelForInference(DenseModel):
 
     @classmethod
     def build(
-            cls,
-            model_name_or_path: str = None,
-            model_args: ModelArguments = None,
-            data_args: DataArguments = None,
-            train_args: TrainingArguments = None,
-            **hf_kwargs,
+        cls,
+        model_name_or_path: str = None,
+        model_args: ModelArguments = None,
+        data_args: DataArguments = None,
+        train_args: TrainingArguments = None,
+        **hf_kwargs,
     ):
         assert model_name_or_path is not None or model_args is not None
         assert "config" in hf_kwargs
@@ -377,39 +405,35 @@ class DenseModelForInference(DenseModel):
             else:
                 model_cls = RobertaForSequenceClassification
         else:
-            raise ValueError("Currently only support model_type in 'bert', 'roberta', 'deberta'")
+            raise ValueError(
+                "Currently only support model_type in 'bert', 'roberta', 'deberta'"
+            )
 
         # load local
         if os.path.isdir(model_name_or_path):
-            _qry_model_path = os.path.join(model_name_or_path, 'query_model')
-            _psg_model_path = os.path.join(model_name_or_path, 'passage_model')
+            _qry_model_path = os.path.join(model_name_or_path, "query_model")
+            _psg_model_path = os.path.join(model_name_or_path, "passage_model")
             if os.path.exists(_qry_model_path):
-                logger.info(f'found separate weight for query/passage encoders')
-                logger.info(f'loading query model weight from {_qry_model_path}')
-                lm_q = model_cls.from_pretrained(
-                    _qry_model_path,
-                    **hf_kwargs
-                )
-                logger.info(f'loading passage model weight from {_psg_model_path}')
-                lm_p = model_cls.from_pretrained(
-                    _psg_model_path,
-                    **hf_kwargs
-                )
+                logger.info(f"found separate weight for query/passage encoders")
+                logger.info(f"loading query model weight from {_qry_model_path}")
+                lm_q = model_cls.from_pretrained(_qry_model_path, **hf_kwargs)
+                logger.info(f"loading passage model weight from {_psg_model_path}")
+                lm_p = model_cls.from_pretrained(_psg_model_path, **hf_kwargs)
             else:
-                logger.info(f'try loading tied weight')
-                logger.info(f'loading model weight from {model_name_or_path}')
+                logger.info(f"try loading tied weight")
+                logger.info(f"loading model weight from {model_name_or_path}")
                 lm_q = model_cls.from_pretrained(model_name_or_path, **hf_kwargs)
                 lm_p = lm_q
         else:
-            logger.info(f'try loading tied weight')
-            logger.info(f'loading model weight from {model_name_or_path}')
+            logger.info(f"try loading tied weight")
+            logger.info(f"loading model weight from {model_name_or_path}")
             lm_q = model_cls.from_pretrained(model_name_or_path, **hf_kwargs)
             lm_p = lm_q
 
-        pooler_weights = os.path.join(model_name_or_path, 'pooler.pt')
-        pooler_config = os.path.join(model_name_or_path, 'pooler_config.json')
+        pooler_weights = os.path.join(model_name_or_path, "pooler.pt")
+        pooler_config = os.path.join(model_name_or_path, "pooler_config.json")
         if os.path.exists(pooler_weights) and os.path.exists(pooler_config):
-            logger.info(f'found pooler weight and configuration')
+            logger.info(f"found pooler weight and configuration")
             with open(pooler_config) as f:
                 pooler_config_dict = json.load(f)
             pooler = cls.POOLER_CLS(**pooler_config_dict)
@@ -417,10 +441,5 @@ class DenseModelForInference(DenseModel):
         else:
             pooler = None
 
-        model = cls(
-            lm_q=lm_q,
-            lm_p=lm_p,
-            pooler=pooler
-        )
+        model = cls(lm_q=lm_q, lm_p=lm_p, pooler=pooler)
         return model
-
