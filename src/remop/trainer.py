@@ -266,7 +266,6 @@ class GCTrainer(DenseTrainer):
 
     def training_step(self, model, inputs, num_items_in_batch=None) -> torch.Tensor:
         model.train()
-
         queries, passages, attrs = self._prepare_inputs(inputs)
         n_passages = self.model.data_args.train_n_passages
         queries, passages = {"query": queries, "attrs": attrs}, {

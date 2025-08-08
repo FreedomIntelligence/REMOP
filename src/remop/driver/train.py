@@ -88,7 +88,8 @@ def main():
         use_fast=False,
     )
     # we need to set the model_name_or_path here because the build function will use it to load the model
-    model_args.model_name_or_path = training_args.checkpoint_dir
+    if training_args.checkpoint_dir:
+        model_args.model_name_or_path = training_args.checkpoint_dir
     model = DenseModel.build(
         model_args,
         data_args,
@@ -113,6 +114,7 @@ def main():
         ),
     )
 
+
     attribute_prompt = (
         model_args.attribute_prompt_dir
         if model_args.attribute_prompt_dir
@@ -126,7 +128,11 @@ def main():
     )
     train_dataset.trainer = trainer
 
-    trainer.train(resume_from_checkpoint=training_args.checkpoint_dir)
+    if training_args.checkpoint_dir:
+        trainer.train(resume_from_checkpoint=training_args.checkpoint_dir)
+    else:
+        trainer.train()
+
     trainer.save_prompt(dataset_attributes)
     trainer.save_model()
 
