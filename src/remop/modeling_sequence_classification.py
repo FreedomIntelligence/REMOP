@@ -30,11 +30,16 @@ class BertPrefixForSequenceClassification(BertPreTrainedModel):
         self.n_layer = config.num_hidden_layers
         self.n_head = config.num_attention_heads
         self.n_embd = config.hidden_size // config.num_attention_heads
+        self.trainable_routing = True
+        logger.info(f"use trainable routing: {self.trainable_routing}")
 
         self.prefix_tokens = torch.arange(self.pre_seq_len).long()
         self.general_prefix_encoder = PrefixEncoder(config)
-        
+
         self.attribute_prefix_encoders = ModuleList()
+        
+        # add the routing for attributes. 
+        self.router = torch.nn.Linear(config.hidden_size, 8).to(self.bert.device) # need to be changed. we set 8 here. 
         
         plm_param = 0
         for name, param in self.bert.named_parameters():
@@ -45,7 +50,7 @@ class BertPrefixForSequenceClassification(BertPreTrainedModel):
         non_plm_param = all_param - plm_param
         logger.info(f"All param size: {all_param}; Plm param size: {plm_param}; Non-Plm param size: {non_plm_param}")
 
-    def get_prompt(self, batch_size, attrs):
+    def get_prompt(self, batch_size, attrs, input_embeds=None):
         pkv_size = (
             self.pre_seq_len,
             self.n_layer * 2,
@@ -55,7 +60,6 @@ class BertPrefixForSequenceClassification(BertPreTrainedModel):
 
         prefix_tokens = self.prefix_tokens.unsqueeze(0).to(self.bert.device)
         general_past_key_values = self.general_prefix_encoder(prefix_tokens).view(pkv_size)
-
         if attrs is None or len(self.attribute_prefix_encoders) == 0:
             past_key_values = general_past_key_values.unsqueeze(0).repeat(batch_size, 1, 1, 1, 1)
         else:
@@ -64,8 +68,14 @@ class BertPrefixForSequenceClassification(BertPreTrainedModel):
 
             # attrs shape: (batch_size, n_prompt)
             attrs = attrs.to(self.bert.device)
+
+            if self.trainable_routing:
+                # input_embeds shape: (batch_size, seq_len, hidden_size)
+                sum_embeds = torch.sum(input_embeds, dim=1)
+                attrs = self.router(sum_embeds)
+
             attribute_past_key_values = [attribute_encoder(prefix_tokens) for attribute_encoder in self.attribute_prefix_encoders]
-            
+
             n_prompt = len(attribute_past_key_values)
             attribute_past_key_values = [pkv.view(pkv_size) for pkv in attribute_past_key_values]
 
@@ -114,10 +124,13 @@ class BertPrefixForSequenceClassification(BertPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         batch_size = input_ids.shape[0]
-        past_key_values = self.get_prompt(batch_size=batch_size, attrs=attrs)
+
+        # get the input_representation of the prompt. 
+        if self.trainable_routing:
+            input_embeds = self.bert.embeddings(input_ids)
+        past_key_values = self.get_prompt(batch_size=batch_size, attrs=attrs, input_embeds=input_embeds)
         prefix_attention_mask = torch.ones(batch_size, self.pre_seq_len).to(self.bert.device)
         attention_mask = torch.cat((prefix_attention_mask, attention_mask), dim=1)
-
         outputs = self.bert(
             input_ids,
             attention_mask=attention_mask,
